@@ -50,6 +50,10 @@ class MainActivity : AppCompatActivity() {
     private val CHANNEL_ID = "music_channel"
     private val NOTIFICATION_ID = 1
 
+    private val ACTION_PREV = "action_prev"
+    private val ACTION_PLAY_PAUSE = "action_play_pause"
+    private val ACTION_NEXT = "action_next"
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -130,7 +134,50 @@ class MainActivity : AppCompatActivity() {
             override fun onStopTrackingTouch(sb: SeekBar?) {}
         })
 
+        // Trata cliques vindos da notificação
+        when (intent?.action) {
+            ACTION_PREV -> prevButton.performClick()
+            ACTION_PLAY_PAUSE -> playPauseButton.performClick()
+            ACTION_NEXT -> nextButton.performClick()
+        }
+
         checkPermissionsAndLoadMusic()
+    }
+
+
+    private fun getPendingIntent(action: String): PendingIntent {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            this.action = action
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        return PendingIntent.getActivity(
+            this,
+            action.hashCode(),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    private fun showNotification(music: Music) {
+        val customView = RemoteViews(packageName, R.layout.custom_notification).apply {
+            setTextViewText(R.id.nowPlayingText, "${music.title} - ${music.artist}")
+            setTextViewText(R.id.playPauseButton, if (mediaPlayer?.isPlaying == true) "⏸︎" else "▶")
+            setProgressBar(R.id.seekBar, mediaPlayer?.duration ?: 0, mediaPlayer?.currentPosition ?: 0, false)
+
+            setOnClickPendingIntent(R.id.prevButton, getPendingIntent(ACTION_PREV))
+            setOnClickPendingIntent(R.id.playPauseButton, getPendingIntent(ACTION_PLAY_PAUSE))
+            setOnClickPendingIntent(R.id.nextButton, getPendingIntent(ACTION_NEXT))
+        }
+
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setCustomContentView(customView)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(NOTIFICATION_ID, notification)
     }
 
     private fun checkPermissionsAndLoadMusic() {
