@@ -1,9 +1,6 @@
 package com.example.midiaplayer
 
 import android.Manifest
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
@@ -20,7 +17,6 @@ import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import androidx.core.app.NotificationCompat
 import java.io.IOException
 
 data class Music(val title: String, val artist: String, val uri: Uri)
@@ -47,12 +43,15 @@ class MainActivity : AppCompatActivity() {
     private var randomQueue: MutableList<Int> = mutableListOf()
     private var isShuffleMode: Boolean = false
 
-    private val CHANNEL_ID = "music_channel"
-    private val NOTIFICATION_ID = 1
-
-    private val ACTION_PREV = "action_prev"
-    private val ACTION_PLAY_PAUSE = "action_play_pause"
-    private val ACTION_NEXT = "action_next"
+    // Declaração do launcher fora do onCreate
+    private val requestPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+            if (isGranted) {
+                loadMusic()
+            } else {
+                Toast.makeText(this, "Permissão para notificações negada", Toast.LENGTH_SHORT).show()
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,8 +67,6 @@ class MainActivity : AppCompatActivity() {
 
         val playAllButton: Button = findViewById(R.id.playAllButton)
         val shuffleButton: Button = findViewById(R.id.shuffleButton)
-
-        createNotificationChannel()
 
         // Botão "Reproduzir" toca todas as músicas na ordem
         playAllButton.setOnClickListener {
@@ -102,31 +99,19 @@ class MainActivity : AppCompatActivity() {
 
         prevButton.setOnClickListener {
             if (musicList.isNotEmpty()) {
-                if (isShuffleMode) {
-                    currentIndex = if (currentIndex - 1 < 0) randomQueue.size - 1 else currentIndex - 1
-                    playMusic(randomQueue[currentIndex])
-                } else {
-                    currentIndex = if (currentIndex - 1 < 0) musicList.size - 1 else currentIndex - 1
-                    playMusic(currentIndex)
-                }
+                navigateMusic(-1)
             }
         }
 
         nextButton.setOnClickListener {
             if (musicList.isNotEmpty()) {
-                if (isShuffleMode) {
-                    currentIndex = (currentIndex + 1) % randomQueue.size
-                    playMusic(randomQueue[currentIndex])
-                } else {
-                    currentIndex = (currentIndex + 1) % musicList.size
-                    playMusic(currentIndex)
-                }
+                navigateMusic(1)
             }
         }
 
         seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                if (fromUser && mediaPlayer != null) {
+                if (fromUser) {
                     mediaPlayer?.seekTo(progress)
                 }
             }
@@ -134,115 +119,20 @@ class MainActivity : AppCompatActivity() {
             override fun onStopTrackingTouch(sb: SeekBar?) {}
         })
 
-        // Trata cliques vindos da notificação
-        when (intent?.action) {
-            ACTION_PREV -> prevButton.performClick()
-            ACTION_PLAY_PAUSE -> playPauseButton.performClick()
-            ACTION_NEXT -> nextButton.performClick()
-        }
-
         checkPermissionsAndLoadMusic()
     }
 
-
-    private fun getPendingIntent(action: String): PendingIntent {
-        val intent = Intent(this, MainActivity::class.java).apply {
-            this.action = action
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
-        }
-        return PendingIntent.getActivity(
-            this,
-            action.hashCode(),
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-    }
-
-    private fun showNotification(music: Music) {
-        val customView = RemoteViews(packageName, R.layout.custom_notification).apply {
-            setTextViewText(R.id.nowPlayingText, "${music.title} - ${music.artist}")
-            setTextViewText(R.id.playPauseButton, if (mediaPlayer?.isPlaying == true) "⏸︎" else "▶")
-            setProgressBar(R.id.seekBar, mediaPlayer?.duration ?: 0, mediaPlayer?.currentPosition ?: 0, false)
-
-            setOnClickPendingIntent(R.id.prevButton, getPendingIntent(ACTION_PREV))
-            setOnClickPendingIntent(R.id.playPauseButton, getPendingIntent(ACTION_PLAY_PAUSE))
-            setOnClickPendingIntent(R.id.nextButton, getPendingIntent(ACTION_NEXT))
-        }
-
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_media_play)
-            .setCustomContentView(customView)
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
-
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(NOTIFICATION_ID, notification)
-    }
-
-    private fun checkPermissionsAndLoadMusic() {
-        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
-            Manifest.permission.READ_MEDIA_AUDIO
-        else
-            Manifest.permission.READ_EXTERNAL_STORAGE
-
-        if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
-            loadMusic()
+    private fun navigateMusic(direction: Int) {
+        if (isShuffleMode) {
+            currentIndex = (currentIndex + direction).takeIf { it in randomQueue.indices } ?: randomQueue.size - 1
+            playMusic(randomQueue[currentIndex])
         } else {
-            requestPermissionLauncher.launch(permission)
+            currentIndex = (currentIndex + direction).takeIf { it in musicList.indices } ?: musicList.size - 1
+            playMusic(currentIndex)
         }
     }
 
-    private val requestPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
-            if (isGranted) {
-                loadMusic()
-            } else {
-                Toast.makeText(this, "Permissão negada para acessar músicas", Toast.LENGTH_SHORT).show()
-            }
-        }
-
-    private fun loadMusic() {
-        val tempList = mutableListOf<Music>()
-        val projection = arrayOf(
-            MediaStore.Audio.Media._ID,
-            MediaStore.Audio.Media.TITLE,
-            MediaStore.Audio.Media.ARTIST
-        )
-        val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
-
-        val cursor = contentResolver.query(
-            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-            projection,
-            selection,
-            null,
-            MediaStore.Audio.Media.TITLE + " ASC"
-        )
-
-        cursor?.use {
-            val idIndex = it.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
-            val titleIndex = it.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
-            val artistIndex = it.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
-
-            while (it.moveToNext()) {
-                val id = it.getLong(idIndex)
-                val title = it.getString(titleIndex)
-                val artist = it.getString(artistIndex)
-
-                val contentUri = ContentUris.withAppendedId(
-                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                    id
-                )
-
-                tempList.add(Music(title, artist, contentUri))
-            }
-        }
-
-        musicList = tempList
-        displayMusicList(musicList)
-    }
-
-    private fun displayMusicList(musicList: List<Music>) {
+    private fun showMusicList() {
         musicListContainer.removeAllViews()
 
         for ((index, music) in musicList.withIndex()) {
@@ -336,53 +226,64 @@ class MainActivity : AppCompatActivity() {
             nowPlayingText.text = "${music.title} - ${music.artist}"
             playPauseButton.text = "⏸︎"
 
-            showNotification(music) // NOTIFICAÇÃO ATUALIZADA
-
         } catch (e: IOException) {
             Toast.makeText(this, "Erro ao tocar: ${music.title}", Toast.LENGTH_SHORT).show()
             e.printStackTrace()
         }
     }
 
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val name = "Música em reprodução"
-            val descriptionText = "Notificações de música tocando"
-            val importance = NotificationManager.IMPORTANCE_LOW
-            val channel = NotificationChannel(CHANNEL_ID, name, importance).apply {
-                description = descriptionText
-            }
-            val notificationManager: NotificationManager =
-                getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.createNotificationChannel(channel)
+    private fun checkPermissionsAndLoadMusic() {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+            Manifest.permission.READ_MEDIA_AUDIO
+        else
+            Manifest.permission.READ_EXTERNAL_STORAGE
+
+        if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
+            loadMusic()
+        } else {
+            requestPermissionLauncher.launch(permission)
         }
     }
 
-    private fun showNotification(music: Music) {
-        val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
-        }
-        val pendingIntent: PendingIntent = PendingIntent.getActivity(
-            this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    private fun loadMusic() {
+        val tempList = mutableListOf<Music>()
+        val projection = arrayOf(
+            MediaStore.Audio.Media._ID,
+            MediaStore.Audio.Media.TITLE,
+            MediaStore.Audio.Media.ARTIST
+        )
+        val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
+        val sortOrder = "${MediaStore.Audio.Media.TITLE} ASC"
+
+        val cursor = contentResolver.query(
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+            projection,
+            selection,
+            null,
+            sortOrder
         )
 
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Tocando agora")
-            .setContentText("${music.title} - ${music.artist}")
-            .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentIntent(pendingIntent)
-            .setOngoing(true)
-            .build()
+        cursor?.use {
+            val idIndex = it.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+            val titleIndex = it.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
+            val artistIndex = it.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
 
-        val notificationManager =
-            getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(NOTIFICATION_ID, notification)
-    }
+            while (it.moveToNext()) {
+                val id = it.getLong(idIndex)
+                val title = it.getString(titleIndex)
+                val artist = it.getString(artistIndex)
 
-    private fun hideNotification() {
-        val notificationManager =
-            getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.cancel(NOTIFICATION_ID)
+                val contentUri = ContentUris.withAppendedId(
+                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                    id
+                )
+
+                tempList.add(Music(title, artist, contentUri))
+            }
+        }
+
+        musicList = tempList
+        showMusicList()
     }
 
     override fun onDestroy() {
@@ -390,6 +291,5 @@ class MainActivity : AppCompatActivity() {
         updateSeekBarRunnable?.let { handler.removeCallbacks(it) }
         mediaPlayer?.release()
         mediaPlayer = null
-        hideNotification()
     }
 }
